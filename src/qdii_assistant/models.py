@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,24 @@ class MarketSnapshot:
 
 
 @dataclass(frozen=True)
+class TradeFundSnapshot:
+    code: str
+    name: str
+    market: str = "0"
+    latest_price: float | None = None
+    previous_close: float | None = None
+    pct_change: float | None = None
+    amount_cny: float | None = None
+    price_time: datetime | None = None
+    nav: float | None = None
+    nav_date: date | None = None
+    premium_rate: float | None = None
+    source: str = "unavailable"
+    buy_blocked: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class DecisionSignal:
     symbol: str
     fund_name: str
@@ -73,6 +91,8 @@ class DecisionSignal:
     total_asset_cny: float
     max_single_trade_cny: float
     snapshot: MarketSnapshot
+    fund_code: str = ""
+    fund_snapshot: TradeFundSnapshot | None = None
     reasons: list[str] = field(default_factory=list)
     risk_warnings: list[str] = field(default_factory=list)
 

@@ -3,7 +3,14 @@ from __future__ import annotations
 import math
 import statistics
 
-from .models import DecisionSignal, MarketSnapshot, PortfolioInput, PriceBar, StrategyConfig
+from .models import (
+    DecisionSignal,
+    MarketSnapshot,
+    PortfolioInput,
+    PriceBar,
+    StrategyConfig,
+    TradeFundSnapshot,
+)
 
 
 def moving_average(values: list[float], window: int) -> float:
@@ -110,6 +117,9 @@ def generate_signal(
     bars: list[PriceBar],
     portfolio: PortfolioInput,
     config: StrategyConfig,
+    fund_code: str = "",
+    fund_snapshot: TradeFundSnapshot | None = None,
+    data_warnings: list[str] | None = None,
 ) -> DecisionSignal:
     snapshot = build_snapshot(symbol, bars)
     max_allocation = config.resolved_max_allocation()
@@ -136,11 +146,36 @@ def generate_signal(
         trade_amount = round_trade_amount(raw_amount, config.trade_round_lot_cny)
         action = "SELL" if trade_amount > 0 else "HOLD"
 
-    reasons = explain(snapshot, current_allocation, target, action, trade_amount, max_allocation)
+    filter_reasons: list[str] = []
+    if action == "BUY" and fund_snapshot and fund_snapshot.buy_blocked:
+        action = "HOLD"
+        trade_amount = 0.0
+        filter_reasons.append(
+            f"{fund_snapshot.code} 交易过滤器提示溢价过高，本次把买入建议过滤为持有。"
+        )
+
+    reasons = explain(
+        snapshot=snapshot,
+        current_allocation=current_allocation,
+        target=target,
+        action=action,
+        trade_amount=trade_amount,
+        max_allocation=max_allocation,
+        allocation_gap=allocation_gap,
+        rebalance_threshold=config.rebalance_threshold,
+    )
+    reasons.extend(describe_fund_filter(fund_snapshot))
+    reasons.extend(filter_reasons)
+
+    if data_warnings:
+        risk_warnings.extend(data_warnings)
+    if fund_snapshot:
+        risk_warnings.extend(fund_snapshot.warnings)
     risk_warnings.extend(common_qdii_warnings(action))
 
     return DecisionSignal(
         symbol=symbol,
+        fund_code=fund_code,
         fund_name=fund_name,
         action=action,
         target_allocation=target,
@@ -149,8 +184,9 @@ def generate_signal(
         total_asset_cny=portfolio.total_asset,
         max_single_trade_cny=max_single_trade,
         snapshot=snapshot,
+        fund_snapshot=fund_snapshot,
         reasons=reasons,
-        risk_warnings=risk_warnings,
+        risk_warnings=dedupe(risk_warnings),
     )
 
 
@@ -161,6 +197,8 @@ def explain(
     action: str,
     trade_amount: float,
     max_allocation: float,
+    allocation_gap: float,
+    rebalance_threshold: float,
 ) -> list[str]:
     reasons: list[str] = []
 
@@ -190,18 +228,45 @@ def explain(
         reasons.append(f"当前仓位 {current_allocation:.0%} 低于目标仓位，建议本次分批买入约 {trade_amount:.0f} 元。")
     elif action == "SELL":
         reasons.append(f"当前仓位 {current_allocation:.0%} 高于目标仓位，建议本次分批卖出约 {trade_amount:.0f} 元。")
+    elif allocation_gap > rebalance_threshold:
+        reasons.append("当前仓位低于目标仓位，但交易过滤器或现金缓冲使本次暂不买入。")
+    elif allocation_gap < -rebalance_threshold:
+        reasons.append("当前仓位高于目标仓位，但持仓或交易金额限制使本次暂不卖出。")
     else:
         reasons.append("当前仓位与目标仓位差距不大，建议暂时持有并继续观察。")
 
     return reasons
 
 
+def describe_fund_filter(fund_snapshot: TradeFundSnapshot | None) -> list[str]:
+    if fund_snapshot is None:
+        return ["未启用实际交易基金过滤器；下单前需要手动检查目标基金。"]
+
+    reasons = [f"实际交易标的为 {fund_snapshot.code} {fund_snapshot.name}。"]
+    if fund_snapshot.premium_rate is not None:
+        reasons.append(f"场内价格相对最新净值折溢价为 {fund_snapshot.premium_rate:.2%}。")
+    if fund_snapshot.amount_cny is not None:
+        reasons.append(f"今日成交额约 {fund_snapshot.amount_cny / 10_000:.1f} 万元，用于辅助判断流动性。")
+    return reasons
+
+
 def common_qdii_warnings(action: str) -> list[str]:
     warnings = [
-        "下单前确认实际 QDII/ETF 是否暂停申购、限制申购或存在明显折溢价。",
         "本工具只生成手动决策参考，不连接券商，不自动下单。",
+        "下单前确认实际 QDII/ETF 是否暂停申购、限制申购或存在明显折溢价。",
     ]
     if action == "BUY":
         warnings.append("买入前确认本次金额不会影响生活备用金。")
     return warnings
+
+
+def dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
