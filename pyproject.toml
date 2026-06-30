@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nasdaq-qdii-assistant"
+version = "0.1.0"
+description = "A compliance-first Nasdaq QDII decision assistant for mainland China investors."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "zhguo9" }]
+dependencies = []
+
+[project.scripts]
+qdii-assistant = "qdii_assistant.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
